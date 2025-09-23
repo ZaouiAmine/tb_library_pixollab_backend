@@ -87,24 +87,19 @@ func sendJSONResponse(h http.Event, data interface{}) uint32 {
 
 //export getChannelURL
 func getChannelURL(e event.Event) uint32 {
-	fmt.Printf("[DEBUG] getChannelURL called\n")
 	h, err := e.HTTP()
 	if err != nil {
-		fmt.Printf("[ERROR] getChannelURL HTTP error: %v\n", err)
 		return 1
 	}
 	setCORSHeaders(h)
 	channelName, err := h.Query().Get("channel")
 	if err != nil {
-		fmt.Printf("[ERROR] getChannelURL channel parameter error: %v\n", err)
 		h.Write([]byte("channel parameter required"))
 		h.Return(400)
 		return 1
 	}
-	fmt.Printf("[DEBUG] getChannelURL channel: %s\n", channelName)
 	channel, err := pubsub.Channel(channelName)
 	if err != nil {
-		fmt.Printf("[ERROR] getChannelURL channel creation error: %v\n", err)
 		h.Write([]byte(err.Error()))
 		h.Return(500)
 		return 1
@@ -112,12 +107,10 @@ func getChannelURL(e event.Event) uint32 {
 	channel.Subscribe()
 	url, err := channel.WebSocket().Url()
 	if err != nil {
-		fmt.Printf("[ERROR] getChannelURL WebSocket URL error: %v\n", err)
 		h.Write([]byte(err.Error()))
 		h.Return(500)
 		return 1
 	}
-	fmt.Printf("[DEBUG] getChannelURL returning URL: %s\n", url.Path)
 	h.Headers().Set("Content-Type", "text/plain")
 	h.Write([]byte(url.Path))
 	h.Return(200)
@@ -159,6 +152,7 @@ func getCanvas(e event.Event) uint32 {
 				coordPart := key[len(fmt.Sprintf("/%s/", room)):]
 				var x, y int
 				if n, err := fmt.Sscanf(coordPart, "%d:%d", &x, &y); n == 2 && err == nil {
+					fmt.Printf("[DEBUG] getCanvas processing pixel at (%d,%d)\n", x, y)
 					// Validate coordinates before accessing canvas
 					if x >= 0 && x < CanvasWidth && y >= 0 && y < CanvasHeight {
 						pixelData, err := db.Get(key)
@@ -166,12 +160,23 @@ func getCanvas(e event.Event) uint32 {
 							var pixel Pixel
 							if json.Unmarshal(pixelData, &pixel) == nil {
 								canvas[y][x] = pixel.Color
+								fmt.Printf("[DEBUG] getCanvas set pixel (%d,%d) to color %s\n", x, y, pixel.Color)
+							} else {
+								fmt.Printf("[ERROR] getCanvas failed to unmarshal pixel data for (%d,%d)\n", x, y)
 							}
+						} else {
+							fmt.Printf("[ERROR] getCanvas failed to get pixel data for (%d,%d): %v\n", x, y, err)
 						}
+					} else {
+						fmt.Printf("[ERROR] getCanvas invalid coordinates (%d,%d) - bounds: [0,%d) x [0,%d)\n", x, y, CanvasWidth, CanvasHeight)
 					}
+				} else {
+					fmt.Printf("[ERROR] getCanvas failed to parse coordinates from key: %s\n", key)
 				}
 			}
 		}
+	} else {
+		fmt.Printf("[ERROR] getCanvas failed to list keys: %v\n", err)
 	}
 	fmt.Printf("[DEBUG] getCanvas returning canvas data\n")
 	return sendJSONResponse(h, canvas)
@@ -252,10 +257,17 @@ func getMessages(e event.Event) uint32 {
 					var message ChatMessage
 					if json.Unmarshal(messageData, &message) == nil {
 						messages = append(messages, message)
+						fmt.Printf("[DEBUG] getMessages loaded message %s from %s\n", message.ID, message.Username)
+					} else {
+						fmt.Printf("[ERROR] getMessages failed to unmarshal message data for key: %s\n", key)
 					}
+				} else {
+					fmt.Printf("[ERROR] getMessages failed to get message data for key: %s, error: %v\n", key, err)
 				}
 			}
 		}
+	} else {
+		fmt.Printf("[ERROR] getMessages failed to list keys: %v\n", err)
 	}
 	sort.Slice(messages, func(i, j int) bool {
 		return messages[i].Timestamp < messages[j].Timestamp
