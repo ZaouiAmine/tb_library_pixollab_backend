@@ -83,50 +83,56 @@ func initDatabases() uint32 {
 	defer dbMutex.Unlock()
 
 	if dbInit {
-		fmt.Printf("[DEBUG] Database already initialized\n")
+		fmt.Printf("[LOG-DB-001] Database already initialized\n")
 		return 0 // Already initialized
 	}
 
-	fmt.Printf("[DEBUG] Initializing database connections\n")
+	fmt.Printf("[LOG-DB-002] Initializing database connections\n")
 	var err error
 	canvasDB, err = database.New("/canvas")
 	if err != nil {
-		fmt.Printf("[ERROR] Failed to create canvas database: %v\n", err)
+		fmt.Printf("[ERROR-DB-003] Canvas database creation failed: %v\n", err)
 		return 1
 	}
-	fmt.Printf("[DEBUG] Canvas database connection created\n")
+	fmt.Printf("[LOG-DB-004] Canvas database created\n")
 
 	chatDB, err = database.New("/chat")
 	if err != nil {
-		fmt.Printf("[ERROR] Failed to create chat database: %v\n", err)
+		fmt.Printf("[ERROR-DB-005] Chat database creation failed: %v\n", err)
 		return 1
 	}
-	fmt.Printf("[DEBUG] Chat database connection created\n")
+	fmt.Printf("[LOG-DB-006] Chat database created\n")
 
 	dbInit = true
-	fmt.Printf("[DEBUG] Database initialization completed\n")
+	fmt.Printf("[LOG-DB-007] Database initialization completed\n")
 	return 0
 }
 
 // Get canvas database connection
 func getCanvasDB() (database.Database, uint32) {
 	if !dbInit {
+		fmt.Printf("[LOG-DB-008] Canvas DB not initialized, initializing\n")
 		if initDatabases() != 0 {
+			fmt.Printf("[ERROR-DB-009] Canvas DB initialization failed\n")
 			var emptyDB database.Database
 			return emptyDB, 1
 		}
 	}
+	fmt.Printf("[LOG-DB-010] Canvas DB connection retrieved\n")
 	return canvasDB, 0
 }
 
 // Get chat database connection
 func getChatDB() (database.Database, uint32) {
 	if !dbInit {
+		fmt.Printf("[LOG-DB-011] Chat DB not initialized, initializing\n")
 		if initDatabases() != 0 {
+			fmt.Printf("[ERROR-DB-012] Chat DB initialization failed\n")
 			var emptyDB database.Database
 			return emptyDB, 1
 		}
 	}
+	fmt.Printf("[LOG-DB-013] Chat DB connection retrieved\n")
 	return chatDB, 0
 }
 
@@ -338,18 +344,18 @@ func getMessages(e event.Event) uint32 {
 
 //export onPixelUpdate
 func onPixelUpdate(e event.Event) uint32 {
-	fmt.Printf("[DEBUG] onPixelUpdate called\n")
+	fmt.Printf("[LOG-PIXEL-001] onPixelUpdate called\n")
 	channel, err := e.PubSub()
 	if err != nil {
-		fmt.Printf("[ERROR] onPixelUpdate PubSub error: %v\n", err)
+		fmt.Printf("[ERROR-PIXEL-002] PubSub error: %v\n", err)
 		return 1
 	}
 	data, err := channel.Data()
 	if err != nil {
-		fmt.Printf("[ERROR] onPixelUpdate channel data error: %v\n", err)
+		fmt.Printf("[ERROR-PIXEL-003] Channel data error: %v\n", err)
 		return 1
 	}
-	fmt.Printf("[DEBUG] onPixelUpdate received %d bytes of data\n", len(data))
+	fmt.Printf("[LOG-PIXEL-004] Received %d bytes of data\n", len(data))
 
 	var pixelBatch struct {
 		Pixels    []Pixel `json:"pixels"`
@@ -373,7 +379,7 @@ func onPixelUpdate(e event.Event) uint32 {
 	err = json.Unmarshal(data, &compressedBatch)
 	if err == nil && len(compressedBatch.P) > 0 {
 		// Handle compressed format
-		fmt.Printf("[DEBUG] onPixelUpdate received compressed format with %d pixels\n", len(compressedBatch.P))
+		fmt.Printf("[LOG-PIXEL-005] Compressed format with %d pixels\n", len(compressedBatch.P))
 		room = compressedBatch.R
 		if room == "" {
 			room = "default"
@@ -407,7 +413,7 @@ func onPixelUpdate(e event.Event) uint32 {
 		// Try uncompressed format
 		err = json.Unmarshal(data, &pixelBatch)
 		if err != nil {
-			fmt.Printf("[ERROR] onPixelUpdate JSON unmarshal error: %v\n", err)
+			fmt.Printf("[ERROR-PIXEL-006] JSON unmarshal error: %v\n", err)
 			return 1
 		}
 	}
@@ -416,14 +422,15 @@ func onPixelUpdate(e event.Event) uint32 {
 	if room == "" {
 		room = "default"
 	}
-	fmt.Printf("[DEBUG] onPixelUpdate processing %d pixels for room %s\n", len(pixelBatch.Pixels), room)
+	fmt.Printf("[LOG-PIXEL-007] Processing %d pixels for room %s\n", len(pixelBatch.Pixels), room)
 
 	// Get pooled database connection
 	db, dbErr := getCanvasDB()
 	if dbErr != 0 {
-		fmt.Printf("[ERROR] onPixelUpdate database connection failed\n")
+		fmt.Printf("[ERROR-PIXEL-008] Database connection failed\n")
 		return 1
 	}
+	fmt.Printf("[LOG-PIXEL-009] Database connection successful\n")
 
 	// Batch process pixels for better performance
 	validPixels := make([]Pixel, 0, len(pixelBatch.Pixels))
@@ -433,37 +440,47 @@ func onPixelUpdate(e event.Event) uint32 {
 			validPixels = append(validPixels, pixel)
 		}
 	}
-	fmt.Printf("[DEBUG] onPixelUpdate processing %d valid pixels\n", len(validPixels))
+	fmt.Printf("[LOG-PIXEL-010] Processing %d valid pixels\n", len(validPixels))
 
 	// Batch save all valid pixels
+	savedCount := 0
+	failedCount := 0
 	for _, pixel := range validPixels {
 		pixelData, err := json.Marshal(pixel)
 		if err == nil {
 			key := fmt.Sprintf("/%s/%d:%d", room, pixel.X, pixel.Y)
 			err = db.Put(key, pixelData)
 			if err != nil {
-				fmt.Printf("[ERROR] Failed to save pixel (%d,%d) to database: %v\n", pixel.X, pixel.Y, err)
+				fmt.Printf("[ERROR-PIXEL-011] Save failed (%d,%d): %v\n", pixel.X, pixel.Y, err)
+				failedCount++
 			} else {
-				fmt.Printf("[DEBUG] Successfully saved pixel (%d,%d) to key: %s\n", pixel.X, pixel.Y, key)
+				fmt.Printf("[LOG-PIXEL-012] Saved (%d,%d) to %s\n", pixel.X, pixel.Y, key)
+				savedCount++
 			}
 		} else {
-			fmt.Printf("[ERROR] Failed to marshal pixel (%d,%d): %v\n", pixel.X, pixel.Y, err)
+			fmt.Printf("[ERROR-PIXEL-013] Marshal failed (%d,%d): %v\n", pixel.X, pixel.Y, err)
+			failedCount++
 		}
 	}
+	fmt.Printf("[LOG-PIXEL-014] Save complete: %d saved, %d failed\n", savedCount, failedCount)
 
 	return 0
 }
 
 //export onChatMessages
 func onChatMessages(e event.Event) uint32 {
+	fmt.Printf("[LOG-CHAT-001] onChatMessages called\n")
 	channel, err := e.PubSub()
 	if err != nil {
+		fmt.Printf("[ERROR-CHAT-002] PubSub error: %v\n", err)
 		return 1
 	}
 	data, err := channel.Data()
 	if err != nil {
+		fmt.Printf("[ERROR-CHAT-003] Channel data error: %v\n", err)
 		return 1
 	}
+	fmt.Printf("[LOG-CHAT-004] Received %d bytes of chat data\n", len(data))
 
 	var message struct {
 		ChatMessage
@@ -472,6 +489,7 @@ func onChatMessages(e event.Event) uint32 {
 	}
 	err = json.Unmarshal(data, &message)
 	if err != nil {
+		fmt.Printf("[ERROR-CHAT-005] JSON unmarshal error: %v\n", err)
 		return 1
 	}
 
@@ -479,17 +497,27 @@ func onChatMessages(e event.Event) uint32 {
 	if room == "" {
 		room = "default"
 	}
+	fmt.Printf("[LOG-CHAT-006] Processing message %s for room %s\n", message.ID, room)
 
 	// Get pooled database connection
 	db, dbErr := getChatDB()
 	if dbErr != 0 {
+		fmt.Printf("[ERROR-CHAT-007] Database connection failed\n")
 		return 1
 	}
+	fmt.Printf("[LOG-CHAT-008] Database connection successful\n")
 
 	messageData, err := json.Marshal(message.ChatMessage)
 	if err == nil {
 		key := fmt.Sprintf("/%s/%s", room, message.ID)
-		db.Put(key, messageData) // Don't check error to avoid blocking
+		err = db.Put(key, messageData)
+		if err != nil {
+			fmt.Printf("[ERROR-CHAT-009] Save failed for message %s: %v\n", message.ID, err)
+		} else {
+			fmt.Printf("[LOG-CHAT-010] Saved message %s to %s\n", message.ID, key)
+		}
+	} else {
+		fmt.Printf("[ERROR-CHAT-011] Marshal failed for message %s: %v\n", message.ID, err)
 	}
 
 	return 0
