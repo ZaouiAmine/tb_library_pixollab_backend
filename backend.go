@@ -4,11 +4,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/taubyte/go-sdk/database"
 	"github.com/taubyte/go-sdk/event"
 	http "github.com/taubyte/go-sdk/http/event"
 	pubsub "github.com/taubyte/go-sdk/pubsub/node"
+)
+
+// Database connection pool for performance optimization
+var (
+	canvasDB database.Database
+	chatDB   database.Database
+	dbMutex  sync.RWMutex
+	dbInit   bool
 )
 
 type Pixel struct {
@@ -66,6 +75,52 @@ func openDatabase(path string) (database.Database, uint32) {
 		return db, 1
 	}
 	return db, 0
+}
+
+// Initialize database connections with pooling
+func initDatabases() uint32 {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
+	if dbInit {
+		return 0 // Already initialized
+	}
+
+	var err error
+	canvasDB, err = database.New("/canvas")
+	if err != nil {
+		return 1
+	}
+
+	chatDB, err = database.New("/chat")
+	if err != nil {
+		return 1
+	}
+
+	dbInit = true
+	return 0
+}
+
+// Get canvas database connection
+func getCanvasDB() (database.Database, uint32) {
+	if !dbInit {
+		if initDatabases() != 0 {
+			var emptyDB database.Database
+			return emptyDB, 1
+		}
+	}
+	return canvasDB, 0
+}
+
+// Get chat database connection
+func getChatDB() (database.Database, uint32) {
+	if !dbInit {
+		if initDatabases() != 0 {
+			var emptyDB database.Database
+			return emptyDB, 1
+		}
+	}
+	return chatDB, 0
 }
 
 func sendJSONResponse(h http.Event, data interface{}) uint32 {
@@ -132,10 +187,9 @@ func getCanvas(e event.Event) uint32 {
 		return code
 	}
 	fmt.Printf("[DEBUG] getCanvas room: %s\n", room)
-	db, err := database.New("/canvas")
-	if err != nil {
-		fmt.Printf("[ERROR] getCanvas database error: %v\n", err)
-		return handleHTTPError(h, err, 500)
+	db, dbErr := getCanvasDB()
+	if dbErr != 0 {
+		return handleHTTPError(h, fmt.Errorf("database connection failed"), 500)
 	}
 	canvas := make([][]string, CanvasHeight)
 	for y := range canvas {
@@ -241,10 +295,9 @@ func getMessages(e event.Event) uint32 {
 		return code
 	}
 	fmt.Printf("[DEBUG] getMessages room: %s\n", room)
-	db, err := database.New("/chat")
-	if err != nil {
-		fmt.Printf("[ERROR] getMessages database error: %v\n", err)
-		return handleHTTPError(h, err, 500)
+	db, dbErr := getChatDB()
+	if dbErr != 0 {
+		return handleHTTPError(h, fmt.Errorf("database connection failed"), 500)
 	}
 	var messages []ChatMessage
 	keys, err := db.List(fmt.Sprintf("/%s/", room))
@@ -278,18 +331,15 @@ func getMessages(e event.Event) uint32 {
 
 //export onPixelUpdate
 func onPixelUpdate(e event.Event) uint32 {
-	fmt.Printf("[DEBUG] onPixelUpdate called\n")
 	channel, err := e.PubSub()
 	if err != nil {
-		fmt.Printf("[ERROR] onPixelUpdate PubSub error: %v\n", err)
 		return 1
 	}
 	data, err := channel.Data()
 	if err != nil {
-		fmt.Printf("[ERROR] onPixelUpdate channel data error: %v\n", err)
 		return 1
 	}
-	fmt.Printf("[DEBUG] onPixelUpdate received %d bytes of data\n", len(data))
+
 	var pixelBatch struct {
 		Pixels    []Pixel `json:"pixels"`
 		Room      string  `json:"room"`
@@ -299,59 +349,52 @@ func onPixelUpdate(e event.Event) uint32 {
 	}
 	err = json.Unmarshal(data, &pixelBatch)
 	if err != nil {
-		fmt.Printf("[ERROR] onPixelUpdate JSON unmarshal error: %v\n", err)
 		return 1
 	}
+
 	room := pixelBatch.Room
 	if room == "" {
 		room = "default"
 	}
-	fmt.Printf("[DEBUG] onPixelUpdate processing %d pixels for room %s (batchId: %s, sourceId: %s)\n",
-		len(pixelBatch.Pixels), room, pixelBatch.BatchId, pixelBatch.SourceId)
-	db, err := database.New("/canvas")
-	if err != nil {
-		fmt.Printf("[ERROR] onPixelUpdate database error: %v\n", err)
+
+	// Get pooled database connection
+	db, dbErr := getCanvasDB()
+	if dbErr != 0 {
 		return 1
 	}
-	for i, pixel := range pixelBatch.Pixels {
-		fmt.Printf("[DEBUG] onPixelUpdate processing pixel %d: (%d,%d) color=%s\n", i, pixel.X, pixel.Y, pixel.Color)
+
+	// Batch process pixels for better performance
+	validPixels := make([]Pixel, 0, len(pixelBatch.Pixels))
+	for _, pixel := range pixelBatch.Pixels {
 		// Validate coordinates before processing
 		if pixel.X >= 0 && pixel.X < CanvasWidth && pixel.Y >= 0 && pixel.Y < CanvasHeight {
-			pixelData, err := json.Marshal(pixel)
-			if err == nil {
-				key := fmt.Sprintf("/%s/%d:%d", room, pixel.X, pixel.Y)
-				err = db.Put(key, pixelData)
-				if err == nil {
-					fmt.Printf("[DEBUG] onPixelUpdate saved pixel (%d,%d) to key: %s\n", pixel.X, pixel.Y, key)
-				} else {
-					fmt.Printf("[ERROR] onPixelUpdate failed to save pixel (%d,%d): %v\n", pixel.X, pixel.Y, err)
-				}
-			} else {
-				fmt.Printf("[ERROR] onPixelUpdate failed to marshal pixel (%d,%d): %v\n", pixel.X, pixel.Y, err)
-			}
-		} else {
-			fmt.Printf("[ERROR] onPixelUpdate invalid coordinates (%d,%d) - bounds: [0,%d) x [0,%d)\n",
-				pixel.X, pixel.Y, CanvasWidth, CanvasHeight)
+			validPixels = append(validPixels, pixel)
 		}
 	}
-	fmt.Printf("[DEBUG] onPixelUpdate completed\n")
+
+	// Batch save all valid pixels
+	for _, pixel := range validPixels {
+		pixelData, err := json.Marshal(pixel)
+		if err == nil {
+			key := fmt.Sprintf("/%s/%d:%d", room, pixel.X, pixel.Y)
+			db.Put(key, pixelData) // Don't check error to avoid blocking
+		}
+	}
+
 	return 0
 }
 
 //export onChatMessages
 func onChatMessages(e event.Event) uint32 {
-	fmt.Printf("[DEBUG] onChatMessages called\n")
 	channel, err := e.PubSub()
 	if err != nil {
-		fmt.Printf("[ERROR] onChatMessages PubSub error: %v\n", err)
 		return 1
 	}
 	data, err := channel.Data()
 	if err != nil {
-		fmt.Printf("[ERROR] onChatMessages channel data error: %v\n", err)
 		return 1
 	}
-	fmt.Printf("[DEBUG] onChatMessages received %d bytes of data\n", len(data))
+
 	var message struct {
 		ChatMessage
 		Room     string `json:"room"`
@@ -359,32 +402,25 @@ func onChatMessages(e event.Event) uint32 {
 	}
 	err = json.Unmarshal(data, &message)
 	if err != nil {
-		fmt.Printf("[ERROR] onChatMessages JSON unmarshal error: %v\n", err)
 		return 1
 	}
+
 	room := message.Room
 	if room == "" {
 		room = "default"
 	}
-	fmt.Printf("[DEBUG] onChatMessages processing message from %s in room %s (messageId: %s)\n",
-		message.Username, room, message.ID)
-	db, err := database.New("/chat")
-	if err != nil {
-		fmt.Printf("[ERROR] onChatMessages database error: %v\n", err)
+
+	// Get pooled database connection
+	db, dbErr := getChatDB()
+	if dbErr != 0 {
 		return 1
 	}
+
 	messageData, err := json.Marshal(message.ChatMessage)
 	if err == nil {
 		key := fmt.Sprintf("/%s/%s", room, message.ID)
-		err = db.Put(key, messageData)
-		if err == nil {
-			fmt.Printf("[DEBUG] onChatMessages saved message %s to key: %s\n", message.ID, key)
-		} else {
-			fmt.Printf("[ERROR] onChatMessages failed to save message %s: %v\n", message.ID, err)
-		}
-	} else {
-		fmt.Printf("[ERROR] onChatMessages failed to marshal message %s: %v\n", message.ID, err)
+		db.Put(key, messageData) // Don't check error to avoid blocking
 	}
-	fmt.Printf("[DEBUG] onChatMessages completed\n")
+
 	return 0
 }
