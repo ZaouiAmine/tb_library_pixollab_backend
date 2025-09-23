@@ -306,7 +306,7 @@ func onPixelUpdate(e event.Event) uint32 {
 	if room == "" {
 		room = "default"
 	}
-	fmt.Printf("[DEBUG] onPixelUpdate processing %d pixels for room %s (batchId: %s, sourceId: %s)\n", 
+	fmt.Printf("[DEBUG] onPixelUpdate processing %d pixels for room %s (batchId: %s, sourceId: %s)\n",
 		len(pixelBatch.Pixels), room, pixelBatch.BatchId, pixelBatch.SourceId)
 	db, err := database.New("/canvas")
 	if err != nil {
@@ -330,7 +330,7 @@ func onPixelUpdate(e event.Event) uint32 {
 				fmt.Printf("[ERROR] onPixelUpdate failed to marshal pixel (%d,%d): %v\n", pixel.X, pixel.Y, err)
 			}
 		} else {
-			fmt.Printf("[ERROR] onPixelUpdate invalid coordinates (%d,%d) - bounds: [0,%d) x [0,%d)\n", 
+			fmt.Printf("[ERROR] onPixelUpdate invalid coordinates (%d,%d) - bounds: [0,%d) x [0,%d)\n",
 				pixel.X, pixel.Y, CanvasWidth, CanvasHeight)
 		}
 	}
@@ -366,7 +366,7 @@ func onChatMessages(e event.Event) uint32 {
 	if room == "" {
 		room = "default"
 	}
-	fmt.Printf("[DEBUG] onChatMessages processing message from %s in room %s (messageId: %s)\n", 
+	fmt.Printf("[DEBUG] onChatMessages processing message from %s in room %s (messageId: %s)\n",
 		message.Username, room, message.ID)
 	db, err := database.New("/chat")
 	if err != nil {
