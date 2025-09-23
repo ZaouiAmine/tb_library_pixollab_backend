@@ -71,22 +71,12 @@ func openDatabase(path string) (database.Database, uint32) {
 func sendJSONResponse(h http.Event, data interface{}) uint32 {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		h.Write([]byte("{\"error\":\"Failed to marshal JSON\"}"))
+		h.Write([]byte(err.Error()))
 		h.Return(500)
 		return 1
 	}
-
-	// Set headers before writing
 	h.Headers().Set("Content-Type", "application/json")
-	h.Headers().Set("Access-Control-Allow-Origin", "*")
-
-	// Write the JSON data
-	if len(jsonData) > 0 {
-		h.Write(jsonData)
-	} else {
-		h.Write([]byte("[]"))
-	}
-
+	h.Write(jsonData)
 	h.Return(200)
 	return 0
 }
@@ -134,8 +124,10 @@ func getCanvas(e event.Event) uint32 {
 	if code != 0 {
 		return code
 	}
-
-	// Initialize canvas with default white pixels
+	db, err := database.New("/canvas")
+	if err != nil {
+		return handleHTTPError(h, err, 500)
+	}
 	canvas := make([][]string, CanvasHeight)
 	for y := range canvas {
 		canvas[y] = make([]string, CanvasWidth)
@@ -143,47 +135,24 @@ func getCanvas(e event.Event) uint32 {
 			canvas[y][x] = "#ffffff"
 		}
 	}
-
-	// Try to open database, but don't fail if it doesn't exist
-	db, err := database.New("/canvas")
-	if err != nil {
-		// If database doesn't exist or can't be opened, return empty canvas
-		return sendJSONResponse(h, canvas)
-	}
-
-	// Get all keys for this room
-	roomPrefix := fmt.Sprintf("/%s/", room)
-	keys, err := db.List(roomPrefix)
-	if err != nil {
-		// If we can't list keys, return empty canvas
-		return sendJSONResponse(h, canvas)
-	}
-
-	// Process each pixel
-	for _, key := range keys {
-		// Ensure the key is longer than the room prefix
-		if len(key) <= len(roomPrefix) {
-			continue
-		}
-
-		// Extract coordinates from key
-		coordPart := key[len(roomPrefix):]
-		var x, y int
-		if n, err := fmt.Sscanf(coordPart, "%d:%d", &x, &y); n == 2 && err == nil {
-			// Validate coordinates are within bounds
-			if x >= 0 && x < CanvasWidth && y >= 0 && y < CanvasHeight {
-				// Get pixel data
-				pixelData, err := db.Get(key)
-				if err == nil && len(pixelData) > 0 {
-					var pixel Pixel
-					if json.Unmarshal(pixelData, &pixel) == nil {
-						canvas[y][x] = pixel.Color
+	keys, err := db.List(fmt.Sprintf("/%s/", room))
+	if err == nil {
+		for _, key := range keys {
+			if len(key) > len(fmt.Sprintf("/%s/", room)) {
+				coordPart := key[len(fmt.Sprintf("/%s/", room)):]
+				var x, y int
+				if n, err := fmt.Sscanf(coordPart, "%d:%d", &x, &y); n == 2 && err == nil {
+					pixelData, err := db.Get(key)
+					if err == nil {
+						var pixel Pixel
+						if json.Unmarshal(pixelData, &pixel) == nil {
+							canvas[y][x] = pixel.Color
+						}
 					}
 				}
 			}
 		}
 	}
-
 	return sendJSONResponse(h, canvas)
 }
 
@@ -242,45 +211,28 @@ func getMessages(e event.Event) uint32 {
 	if code != 0 {
 		return code
 	}
-
-	var messages []ChatMessage
-
-	// Try to open database, but don't fail if it doesn't exist
 	db, err := database.New("/chat")
 	if err != nil {
-		// If database doesn't exist, return empty messages
-		return sendJSONResponse(h, messages)
+		return handleHTTPError(h, err, 500)
 	}
-
-	// Get all keys for this room
-	roomPrefix := fmt.Sprintf("/%s/", room)
-	keys, err := db.List(roomPrefix)
-	if err != nil {
-		// If we can't list keys, return empty messages
-		return sendJSONResponse(h, messages)
-	}
-
-	// Process each message
-	for _, key := range keys {
-		// Ensure the key is longer than the room prefix
-		if len(key) <= len(roomPrefix) {
-			continue
-		}
-
-		messageData, err := db.Get(key)
-		if err == nil && len(messageData) > 0 {
-			var message ChatMessage
-			if json.Unmarshal(messageData, &message) == nil {
-				messages = append(messages, message)
+	var messages []ChatMessage
+	keys, err := db.List(fmt.Sprintf("/%s/", room))
+	if err == nil {
+		for _, key := range keys {
+			if len(key) > len(fmt.Sprintf("/%s/", room)) {
+				messageData, err := db.Get(key)
+				if err == nil {
+					var message ChatMessage
+					if json.Unmarshal(messageData, &message) == nil {
+						messages = append(messages, message)
+					}
+				}
 			}
 		}
 	}
-
-	// Sort messages by timestamp
 	sort.Slice(messages, func(i, j int) bool {
 		return messages[i].Timestamp < messages[j].Timestamp
 	})
-
 	return sendJSONResponse(h, messages)
 }
 
@@ -309,21 +261,14 @@ func onPixelUpdate(e event.Event) uint32 {
 	if room == "" {
 		room = "default"
 	}
-
 	db, err := database.New("/canvas")
 	if err != nil {
 		return 1
 	}
-
-	// Process each pixel with bounds checking
 	for _, pixel := range pixelBatch.Pixels {
-		// Validate pixel coordinates are within canvas bounds
-		if pixel.X >= 0 && pixel.X < CanvasWidth && pixel.Y >= 0 && pixel.Y < CanvasHeight {
-			pixelData, err := json.Marshal(pixel)
-			if err == nil {
-				key := fmt.Sprintf("/%s/%d:%d", room, pixel.X, pixel.Y)
-				db.Put(key, pixelData)
-			}
+		pixelData, err := json.Marshal(pixel)
+		if err == nil {
+			db.Put(fmt.Sprintf("/%s/%d:%d", room, pixel.X, pixel.Y), pixelData)
 		}
 	}
 	return 0
