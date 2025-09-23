@@ -83,21 +83,28 @@ func initDatabases() uint32 {
 	defer dbMutex.Unlock()
 
 	if dbInit {
+		fmt.Printf("[DEBUG] Database already initialized\n")
 		return 0 // Already initialized
 	}
 
+	fmt.Printf("[DEBUG] Initializing database connections\n")
 	var err error
 	canvasDB, err = database.New("/canvas")
 	if err != nil {
+		fmt.Printf("[ERROR] Failed to create canvas database: %v\n", err)
 		return 1
 	}
+	fmt.Printf("[DEBUG] Canvas database connection created\n")
 
 	chatDB, err = database.New("/chat")
 	if err != nil {
+		fmt.Printf("[ERROR] Failed to create chat database: %v\n", err)
 		return 1
 	}
+	fmt.Printf("[DEBUG] Chat database connection created\n")
 
 	dbInit = true
+	fmt.Printf("[DEBUG] Database initialization completed\n")
 	return 0
 }
 
@@ -331,14 +338,18 @@ func getMessages(e event.Event) uint32 {
 
 //export onPixelUpdate
 func onPixelUpdate(e event.Event) uint32 {
+	fmt.Printf("[DEBUG] onPixelUpdate called\n")
 	channel, err := e.PubSub()
 	if err != nil {
+		fmt.Printf("[ERROR] onPixelUpdate PubSub error: %v\n", err)
 		return 1
 	}
 	data, err := channel.Data()
 	if err != nil {
+		fmt.Printf("[ERROR] onPixelUpdate channel data error: %v\n", err)
 		return 1
 	}
+	fmt.Printf("[DEBUG] onPixelUpdate received %d bytes of data\n", len(data))
 
 	var pixelBatch struct {
 		Pixels    []Pixel `json:"pixels"`
@@ -347,19 +358,70 @@ func onPixelUpdate(e event.Event) uint32 {
 		BatchId   string  `json:"batchId"`
 		SourceId  string  `json:"sourceId"`
 	}
-	err = json.Unmarshal(data, &pixelBatch)
-	if err != nil {
-		return 1
+
+	// Try to unmarshal as compressed format first
+	var compressedBatch struct {
+		P [][]interface{} `json:"p"`
+		R string          `json:"r"`
+		T int64           `json:"t"`
+		B string          `json:"b"`
+		S string          `json:"s"`
 	}
 
-	room := pixelBatch.Room
+	var room string
+	// Try compressed format first
+	err = json.Unmarshal(data, &compressedBatch)
+	if err == nil && len(compressedBatch.P) > 0 {
+		// Handle compressed format
+		fmt.Printf("[DEBUG] onPixelUpdate received compressed format with %d pixels\n", len(compressedBatch.P))
+		room = compressedBatch.R
+		if room == "" {
+			room = "default"
+		}
+
+		// Convert compressed pixels to Pixel structs
+		pixels := make([]Pixel, 0, len(compressedBatch.P))
+		for _, p := range compressedBatch.P {
+			if len(p) >= 3 {
+				if x, ok := p[0].(float64); ok {
+					if y, ok := p[1].(float64); ok {
+						if color, ok := p[2].(string); ok {
+							pixels = append(pixels, Pixel{
+								X:        int(x),
+								Y:        int(y),
+								Color:    color,
+								UserID:   compressedBatch.S,
+								Username: "unknown",
+							})
+						}
+					}
+				}
+			}
+		}
+		pixelBatch.Pixels = pixels
+		pixelBatch.Room = room
+		pixelBatch.Timestamp = compressedBatch.T
+		pixelBatch.BatchId = compressedBatch.B
+		pixelBatch.SourceId = compressedBatch.S
+	} else {
+		// Try uncompressed format
+		err = json.Unmarshal(data, &pixelBatch)
+		if err != nil {
+			fmt.Printf("[ERROR] onPixelUpdate JSON unmarshal error: %v\n", err)
+			return 1
+		}
+	}
+
+	room = pixelBatch.Room
 	if room == "" {
 		room = "default"
 	}
+	fmt.Printf("[DEBUG] onPixelUpdate processing %d pixels for room %s\n", len(pixelBatch.Pixels), room)
 
 	// Get pooled database connection
 	db, dbErr := getCanvasDB()
 	if dbErr != 0 {
+		fmt.Printf("[ERROR] onPixelUpdate database connection failed\n")
 		return 1
 	}
 
@@ -371,13 +433,21 @@ func onPixelUpdate(e event.Event) uint32 {
 			validPixels = append(validPixels, pixel)
 		}
 	}
+	fmt.Printf("[DEBUG] onPixelUpdate processing %d valid pixels\n", len(validPixels))
 
 	// Batch save all valid pixels
 	for _, pixel := range validPixels {
 		pixelData, err := json.Marshal(pixel)
 		if err == nil {
 			key := fmt.Sprintf("/%s/%d:%d", room, pixel.X, pixel.Y)
-			db.Put(key, pixelData) // Don't check error to avoid blocking
+			err = db.Put(key, pixelData)
+			if err != nil {
+				fmt.Printf("[ERROR] Failed to save pixel (%d,%d) to database: %v\n", pixel.X, pixel.Y, err)
+			} else {
+				fmt.Printf("[DEBUG] Successfully saved pixel (%d,%d) to key: %s\n", pixel.X, pixel.Y, key)
+			}
+		} else {
+			fmt.Printf("[ERROR] Failed to marshal pixel (%d,%d): %v\n", pixel.X, pixel.Y, err)
 		}
 	}
 
