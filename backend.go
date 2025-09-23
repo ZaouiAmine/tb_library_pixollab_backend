@@ -303,7 +303,7 @@ func onChatMessages(e event.Event) uint32 {
 	}
 	messageData, err := json.Marshal(message.ChatMessage)
 	if err == nil {
-		db.Put(fmt.Sprintf("/%s/%d", room, message.Timestamp), messageData)
+		db.Put(fmt.Sprintf("/%s/%s", room, message.ID), messageData)
 	}
 	return 0
 }
