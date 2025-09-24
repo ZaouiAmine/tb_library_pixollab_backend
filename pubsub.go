@@ -55,72 +55,35 @@ func onPixelUpdate(e event.Event) uint32 {
 	}
 	fmt.Printf("[DEBUG] onPixelUpdate received %d bytes of data\n", len(data))
 
-	var pixelBatch struct {
-		Pixels    []Pixel `json:"pixels"`
-		Room      string  `json:"room"`
-		Timestamp int64   `json:"timestamp"`
-		BatchId   string  `json:"batchId"`
-		SourceId  string  `json:"sourceId"`
-	}
+	var pixels []Pixel
+	var room = "default"
 
-	// Try to unmarshal as compressed format first
-	var compressedBatch struct {
-		P [][]interface{} `json:"p"`
-		R string          `json:"r"`
-		T int64           `json:"t"`
-		B string          `json:"b"`
-		S string          `json:"s"`
-	}
-
-	var room string
-	// Try compressed format first
-	err = json.Unmarshal(data, &compressedBatch)
-	if err == nil && len(compressedBatch.P) > 0 {
-		// Handle compressed format
-		fmt.Printf("[DEBUG] onPixelUpdate received compressed format with %d pixels\n", len(compressedBatch.P))
-		room = compressedBatch.R
-		if room == "" {
-			room = "default"
-		}
-
-		// Convert compressed pixels to Pixel structs
-		pixels := make([]Pixel, 0, len(compressedBatch.P))
-		for _, p := range compressedBatch.P {
-			if len(p) >= 3 {
-				if x, ok := p[0].(float64); ok {
-					if y, ok := p[1].(float64); ok {
-						if color, ok := p[2].(string); ok {
-							pixels = append(pixels, Pixel{
-								X:        int(x),
-								Y:        int(y),
-								Color:    color,
-								UserID:   compressedBatch.S,
-								Username: "unknown",
-							})
-						}
-					}
-				}
-			}
-		}
-		pixelBatch.Pixels = pixels
-		pixelBatch.Room = room
-		pixelBatch.Timestamp = compressedBatch.T
-		pixelBatch.BatchId = compressedBatch.B
-		pixelBatch.SourceId = compressedBatch.S
+	// Try to unmarshal as simple pixel array first
+	err = json.Unmarshal(data, &pixels)
+	if err == nil && len(pixels) > 0 {
+		fmt.Printf("[DEBUG] onPixelUpdate received simple pixel array with %d pixels\n", len(pixels))
 	} else {
-		// Try uncompressed format
+		// Try complex format with metadata
+		var pixelBatch struct {
+			Pixels    []Pixel `json:"pixels"`
+			Room      string  `json:"room"`
+			Timestamp int64   `json:"timestamp"`
+			BatchId   string  `json:"batchId"`
+			SourceId  string  `json:"sourceId"`
+		}
+
 		err = json.Unmarshal(data, &pixelBatch)
 		if err != nil {
 			fmt.Printf("[ERROR] onPixelUpdate JSON unmarshal error: %v\n", err)
 			return 1
 		}
+		pixels = pixelBatch.Pixels
+		if pixelBatch.Room != "" {
+			room = pixelBatch.Room
+		}
 	}
 
-	room = pixelBatch.Room
-	if room == "" {
-		room = "default"
-	}
-	fmt.Printf("[DEBUG] onPixelUpdate processing %d pixels for room %s\n", len(pixelBatch.Pixels), room)
+	fmt.Printf("[DEBUG] onPixelUpdate processing %d pixels for room %s\n", len(pixels), room)
 
 	// Get pooled database connection
 	db, dbErr := getCanvasDB()
@@ -130,8 +93,8 @@ func onPixelUpdate(e event.Event) uint32 {
 	}
 
 	// Batch process pixels for better performance
-	validPixels := make([]Pixel, 0, len(pixelBatch.Pixels))
-	for _, pixel := range pixelBatch.Pixels {
+	validPixels := make([]Pixel, 0, len(pixels))
+	for _, pixel := range pixels {
 		// Validate coordinates before processing
 		if pixel.X >= 0 && pixel.X < CanvasWidth && pixel.Y >= 0 && pixel.Y < CanvasHeight {
 			validPixels = append(validPixels, pixel)
@@ -169,20 +132,13 @@ func onChatMessages(e event.Event) uint32 {
 		return 1
 	}
 
-	var message struct {
-		ChatMessage
-		Room     string `json:"room"`
-		SourceId string `json:"sourceId"`
-	}
-	err = json.Unmarshal(data, &message)
+	var chatMessage ChatMessage
+	err = json.Unmarshal(data, &chatMessage)
 	if err != nil {
 		return 1
 	}
 
-	room := message.Room
-	if room == "" {
-		room = "default"
-	}
+	room := "default"
 
 	// Get pooled database connection
 	db, dbErr := getChatDB()
@@ -190,9 +146,9 @@ func onChatMessages(e event.Event) uint32 {
 		return 1
 	}
 
-	messageData, err := json.Marshal(message.ChatMessage)
+	messageData, err := json.Marshal(chatMessage)
 	if err == nil {
-		key := fmt.Sprintf("/%s/%s", room, message.ID)
+		key := fmt.Sprintf("/%s/%s", room, chatMessage.ID)
 		db.Put(key, messageData) // Don't check error to avoid blocking
 	}
 
