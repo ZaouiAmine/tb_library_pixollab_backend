@@ -16,6 +16,6 @@ type ChatMessage struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-const CanvasWidth = 90
-const CanvasHeight = 90
+const CanvasWidth = 32
+const CanvasHeight = 32
 
