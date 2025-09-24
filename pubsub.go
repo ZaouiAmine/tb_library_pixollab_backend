@@ -58,29 +58,42 @@ func onPixelUpdate(e event.Event) uint32 {
 	var pixels []Pixel
 	var room = "default"
 
-	// Try to unmarshal as simple pixel array first
-	err = json.Unmarshal(data, &pixels)
-	if err == nil && len(pixels) > 0 {
-		fmt.Printf("[DEBUG] onPixelUpdate received simple pixel array with %d pixels\n", len(pixels))
+	// Parse binary data
+	if len(data) >= 4 {
+		// Read pixel count (first 4 bytes, little-endian)
+		pixelCount := int(uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16 | uint32(data[3])<<24)
+		fmt.Printf("[DEBUG] onPixelUpdate received binary data with %d pixels\n", pixelCount)
+		
+		pixels = make([]Pixel, 0, pixelCount)
+		offset := 4
+		
+		for i := 0; i < pixelCount && offset+8 <= len(data); i++ {
+			// Read x (2 bytes, little-endian)
+			x := int(uint16(data[offset]) | uint16(data[offset+1])<<8)
+			offset += 2
+			
+			// Read y (2 bytes, little-endian)
+			y := int(uint16(data[offset]) | uint16(data[offset+1])<<8)
+			offset += 2
+			
+			// Read color (4 bytes, little-endian)
+			colorValue := uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24
+			offset += 4
+			
+			// Convert to hex color string
+			color := fmt.Sprintf("#%06x", colorValue&0xFFFFFF)
+			
+			pixels = append(pixels, Pixel{
+				X:        x,
+				Y:        y,
+				Color:    color,
+				UserID:   "unknown", // Not included in binary format
+				Username: "unknown", // Not included in binary format
+			})
+		}
 	} else {
-		// Try complex format with metadata
-		var pixelBatch struct {
-			Pixels    []Pixel `json:"pixels"`
-			Room      string  `json:"room"`
-			Timestamp int64   `json:"timestamp"`
-			BatchId   string  `json:"batchId"`
-			SourceId  string  `json:"sourceId"`
-		}
-
-		err = json.Unmarshal(data, &pixelBatch)
-		if err != nil {
-			fmt.Printf("[ERROR] onPixelUpdate JSON unmarshal error: %v\n", err)
-			return 1
-		}
-		pixels = pixelBatch.Pixels
-		if pixelBatch.Room != "" {
-			room = pixelBatch.Room
-		}
+		fmt.Printf("[ERROR] onPixelUpdate insufficient binary data: %d bytes\n", len(data))
+		return 1
 	}
 
 	fmt.Printf("[DEBUG] onPixelUpdate processing %d pixels for room %s\n", len(pixels), room)
@@ -133,12 +146,75 @@ func onChatMessages(e event.Event) uint32 {
 	}
 
 	var chatMessage ChatMessage
-	err = json.Unmarshal(data, &chatMessage)
-	if err != nil {
+	room := "default"
+
+	// Parse binary data
+	offset := 0
+	if len(data) < 4 {
+		fmt.Printf("[ERROR] onChatMessages insufficient binary data: %d bytes\n", len(data))
 		return 1
 	}
 
-	room := "default"
+	// Read messageId length and content
+	messageIdLength := int(uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24)
+	offset += 4
+	if offset+messageIdLength > len(data) {
+		fmt.Printf("[ERROR] onChatMessages invalid messageId length: %d\n", messageIdLength)
+		return 1
+	}
+	chatMessage.ID = string(data[offset : offset+messageIdLength])
+	offset += messageIdLength
+
+	// Read userId length and content
+	if offset+4 > len(data) {
+		fmt.Printf("[ERROR] onChatMessages insufficient data for userId length\n")
+		return 1
+	}
+	userIdLength := int(uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24)
+	offset += 4
+	if offset+userIdLength > len(data) {
+		fmt.Printf("[ERROR] onChatMessages invalid userId length: %d\n", userIdLength)
+		return 1
+	}
+	chatMessage.UserID = string(data[offset : offset+userIdLength])
+	offset += userIdLength
+
+	// Read username length and content
+	if offset+4 > len(data) {
+		fmt.Printf("[ERROR] onChatMessages insufficient data for username length\n")
+		return 1
+	}
+	usernameLength := int(uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24)
+	offset += 4
+	if offset+usernameLength > len(data) {
+		fmt.Printf("[ERROR] onChatMessages invalid username length: %d\n", usernameLength)
+		return 1
+	}
+	chatMessage.Username = string(data[offset : offset+usernameLength])
+	offset += usernameLength
+
+	// Read message length and content
+	if offset+4 > len(data) {
+		fmt.Printf("[ERROR] onChatMessages insufficient data for message length\n")
+		return 1
+	}
+	messageLength := int(uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24)
+	offset += 4
+	if offset+messageLength > len(data) {
+		fmt.Printf("[ERROR] onChatMessages invalid message length: %d\n", messageLength)
+		return 1
+	}
+	chatMessage.Message = string(data[offset : offset+messageLength])
+	offset += messageLength
+
+	// Read timestamp
+	if offset+4 > len(data) {
+		fmt.Printf("[ERROR] onChatMessages insufficient data for timestamp\n")
+		return 1
+	}
+	chatMessage.Timestamp = int64(uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24)
+
+	fmt.Printf("[DEBUG] onChatMessages received binary message: %s from %s\n", chatMessage.ID, chatMessage.Username)
 
 	// Get pooled database connection
 	db, dbErr := getChatDB()
