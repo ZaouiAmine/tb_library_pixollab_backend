@@ -93,7 +93,7 @@ func onPixelUpdate(e event.Event) uint32 {
 			colorValue := uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24
 			offset += 4
 			
-			// Convert to hex color string
+			// Convert to hex color string (ensure 6 digits)
 			color := fmt.Sprintf("#%06x", colorValue&0xFFFFFF)
 			
 			pixels = append(pixels, Pixel{
