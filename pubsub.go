@@ -123,34 +123,32 @@ func onPixelUpdate(e event.Event) uint32 {
 			validPixels = append(validPixels, pixel)
 		}
 	}
-	fmt.Printf("[DEBUG] onPixelUpdate validated %d pixels - WebSocket should be instant\n", len(validPixels))
+	fmt.Printf("[DEBUG] onPixelUpdate validated %d pixels\n", len(validPixels))
 
-	// Save pixels to database asynchronously (non-blocking)
-	go func() {
-		db, dbErr := getCanvasDB()
-		if dbErr != 0 {
-			fmt.Printf("[ERROR] onPixelUpdate database connection failed\n")
-			return
-		}
+	// Save pixels to database
+	db, dbErr := getCanvasDB()
+	if dbErr != 0 {
+		fmt.Printf("[ERROR] onPixelUpdate database connection failed\n")
+		return 1
+	}
 
-		successCount := 0
-		for _, pixel := range validPixels {
-			pixelData, err := json.Marshal(pixel)
-			if err != nil {
-				fmt.Printf("[ERROR] Failed to marshal pixel (%d,%d): %v\n", pixel.X, pixel.Y, err)
-				continue
-			}
-			
-			key := fmt.Sprintf("/%s/%d:%d", room, pixel.X, pixel.Y)
-			err = db.Put(key, pixelData)
-			if err != nil {
-				fmt.Printf("[ERROR] Failed to save pixel (%d,%d) to database: %v\n", pixel.X, pixel.Y, err)
-			} else {
-				successCount++
-			}
+	successCount := 0
+	for _, pixel := range validPixels {
+		pixelData, err := json.Marshal(pixel)
+		if err != nil {
+			fmt.Printf("[ERROR] Failed to marshal pixel (%d,%d): %v\n", pixel.X, pixel.Y, err)
+			continue
 		}
-		fmt.Printf("[DEBUG] onPixelUpdate saved %d/%d pixels to database (async)\n", successCount, len(validPixels))
-	}()
+		
+		key := fmt.Sprintf("/%s/%d:%d", room, pixel.X, pixel.Y)
+		err = db.Put(key, pixelData)
+		if err != nil {
+			fmt.Printf("[ERROR] Failed to save pixel (%d,%d) to database: %v\n", pixel.X, pixel.Y, err)
+		} else {
+			successCount++
+		}
+	}
+	fmt.Printf("[DEBUG] onPixelUpdate saved %d/%d pixels to database\n", successCount, len(validPixels))
 
 	return 0
 }
@@ -237,28 +235,27 @@ func onChatMessages(e event.Event) uint32 {
 
 	fmt.Printf("[DEBUG] onChatMessages received binary message: %s from %s\n", chatMessage.ID, chatMessage.Username)
 
-	// Save message to database asynchronously (non-blocking)
-	go func() {
-		db, dbErr := getChatDB()
-		if dbErr != 0 {
-			fmt.Printf("[ERROR] onChatMessages database connection failed: %d\n", dbErr)
-			return
-		}
+	// Save message to database
+	db, dbErr := getChatDB()
+	if dbErr != 0 {
+		fmt.Printf("[ERROR] onChatMessages database connection failed: %d\n", dbErr)
+		return 1
+	}
 
-		messageData, err := json.Marshal(chatMessage)
-		if err != nil {
-			fmt.Printf("[ERROR] onChatMessages failed to marshal message %s: %v\n", chatMessage.ID, err)
-			return
-		}
+	messageData, err := json.Marshal(chatMessage)
+	if err != nil {
+		fmt.Printf("[ERROR] onChatMessages failed to marshal message %s: %v\n", chatMessage.ID, err)
+		return 1
+	}
 
-		key := fmt.Sprintf("/%s/%s", room, chatMessage.ID)
-		err = db.Put(key, messageData)
-		if err != nil {
-			fmt.Printf("[ERROR] onChatMessages failed to save message %s to database: %v\n", chatMessage.ID, err)
-		} else {
-			fmt.Printf("[DEBUG] onChatMessages saved message %s to database (async)\n", chatMessage.ID)
-		}
-	}()
+	key := fmt.Sprintf("/%s/%s", room, chatMessage.ID)
+	err = db.Put(key, messageData)
+	if err != nil {
+		fmt.Printf("[ERROR] onChatMessages failed to save message %s to database: %v\n", chatMessage.ID, err)
+		return 1
+	}
+
+	fmt.Printf("[DEBUG] onChatMessages saved message %s to database\n", chatMessage.ID)
 
 	return 0
 }
