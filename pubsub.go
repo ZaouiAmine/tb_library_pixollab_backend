@@ -116,20 +116,25 @@ func onPixelUpdate(e event.Event) uint32 {
 	fmt.Printf("[DEBUG] onPixelUpdate processing %d valid pixels\n", len(validPixels))
 
 	// Batch save all valid pixels
+	successCount := 0
 	for _, pixel := range validPixels {
 		pixelData, err := json.Marshal(pixel)
-		if err == nil {
-			key := fmt.Sprintf("/%s/%d:%d", room, pixel.X, pixel.Y)
-			err = db.Put(key, pixelData)
-			if err != nil {
-				fmt.Printf("[ERROR] Failed to save pixel (%d,%d) to database: %v\n", pixel.X, pixel.Y, err)
-			} else {
-				fmt.Printf("[DEBUG] Successfully saved pixel (%d,%d) to key: %s\n", pixel.X, pixel.Y, key)
-			}
-		} else {
+		if err != nil {
 			fmt.Printf("[ERROR] Failed to marshal pixel (%d,%d): %v\n", pixel.X, pixel.Y, err)
+			continue
+		}
+		
+		key := fmt.Sprintf("/%s/%d:%d", room, pixel.X, pixel.Y)
+		err = db.Put(key, pixelData)
+		if err != nil {
+			fmt.Printf("[ERROR] Failed to save pixel (%d,%d) to database: %v\n", pixel.X, pixel.Y, err)
+		} else {
+			successCount++
+			fmt.Printf("[DEBUG] Successfully saved pixel (%d,%d) to key: %s\n", pixel.X, pixel.Y, key)
 		}
 	}
+	
+	fmt.Printf("[DEBUG] onPixelUpdate saved %d/%d pixels successfully\n", successCount, len(validPixels))
 
 	return 0
 }
@@ -219,14 +224,24 @@ func onChatMessages(e event.Event) uint32 {
 	// Get pooled database connection
 	db, dbErr := getChatDB()
 	if dbErr != 0 {
+		fmt.Printf("[ERROR] onChatMessages database connection failed: %d\n", dbErr)
 		return 1
 	}
 
 	messageData, err := json.Marshal(chatMessage)
-	if err == nil {
-		key := fmt.Sprintf("/%s/%s", room, chatMessage.ID)
-		db.Put(key, messageData) // Don't check error to avoid blocking
+	if err != nil {
+		fmt.Printf("[ERROR] onChatMessages failed to marshal message %s: %v\n", chatMessage.ID, err)
+		return 1
 	}
+
+	key := fmt.Sprintf("/%s/%s", room, chatMessage.ID)
+	err = db.Put(key, messageData)
+	if err != nil {
+		fmt.Printf("[ERROR] onChatMessages failed to save message %s to database: %v\n", chatMessage.ID, err)
+		return 1
+	}
+
+	fmt.Printf("[DEBUG] onChatMessages successfully saved message %s to key: %s\n", chatMessage.ID, key)
 
 	return 0
 }
