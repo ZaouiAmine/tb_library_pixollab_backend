@@ -125,9 +125,13 @@ func onPixelUpdate(e event.Event) uint32 {
 	// Batch process pixels for better performance
 	validPixels := make([]Pixel, 0, len(pixels))
 	for _, pixel := range pixels {
+		fmt.Printf("[DEBUG] onPixelUpdate validating pixel (%d,%d) color %s\n", pixel.X, pixel.Y, pixel.Color)
 		// Validate coordinates before processing
 		if pixel.X >= 0 && pixel.X < CanvasWidth && pixel.Y >= 0 && pixel.Y < CanvasHeight {
 			validPixels = append(validPixels, pixel)
+			fmt.Printf("[DEBUG] onPixelUpdate pixel (%d,%d) is valid\n", pixel.X, pixel.Y)
+		} else {
+			fmt.Printf("[ERROR] onPixelUpdate pixel (%d,%d) is invalid - bounds: [0,%d) x [0,%d)\n", pixel.X, pixel.Y, CanvasWidth, CanvasHeight)
 		}
 	}
 	fmt.Printf("[DEBUG] onPixelUpdate processing %d valid pixels\n", len(validPixels))
