@@ -132,6 +132,7 @@ func onPixelUpdate(e event.Event) uint32 {
 		return 1
 	}
 
+	
 	successCount := 0
 	for _, pixel := range validPixels {
 		pixelData, err := json.Marshal(pixel)
