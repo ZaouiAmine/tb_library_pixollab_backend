@@ -81,29 +81,29 @@ func onPixelUpdate(e event.Event) uint32 {
 			pixels = make([]Pixel, 0, pixelCount)
 			
 			for i := 0; i < pixelCount && offset+8 <= len(data); i++ {
-				// Read x (2 bytes, little-endian)
-				x := int(uint16(data[offset]) | uint16(data[offset+1])<<8)
-				offset += 2
-				
-				// Read y (2 bytes, little-endian)
-				y := int(uint16(data[offset]) | uint16(data[offset+1])<<8)
-				offset += 2
-				
-				// Read color (4 bytes, little-endian)
-				colorValue := uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24
-				offset += 4
-				
-				// Convert to hex color string
-				color := fmt.Sprintf("#%06x", colorValue&0xFFFFFF)
-				
-				pixels = append(pixels, Pixel{
-					X:        x,
-					Y:        y,
-					Color:    color,
-					UserID:   "unknown", // Not included in binary format
-					Username: "unknown", // Not included in binary format
-				})
-			}
+			// Read x (2 bytes, little-endian)
+			x := int(uint16(data[offset]) | uint16(data[offset+1])<<8)
+			offset += 2
+			
+			// Read y (2 bytes, little-endian)
+			y := int(uint16(data[offset]) | uint16(data[offset+1])<<8)
+			offset += 2
+			
+			// Read color (4 bytes, little-endian)
+			colorValue := uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24
+			offset += 4
+			
+			// Convert to hex color string
+			color := fmt.Sprintf("#%06x", colorValue&0xFFFFFF)
+			
+			pixels = append(pixels, Pixel{
+				X:        x,
+				Y:        y,
+				Color:    color,
+				UserID:   "unknown", // Not included in binary format
+				Username: "unknown", // Not included in binary format
+			})
+		}
 		} else {
 			fmt.Printf("[ERROR] onPixelUpdate insufficient data for pixel count\n")
 			return 1
