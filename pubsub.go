@@ -60,36 +60,53 @@ func onPixelUpdate(e event.Event) uint32 {
 
 	// Parse binary data
 	if len(data) >= 4 {
-		// Read pixel count (first 4 bytes, little-endian)
-		pixelCount := int(uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16 | uint32(data[3])<<24)
-		fmt.Printf("[DEBUG] onPixelUpdate received binary data with %d pixels\n", pixelCount)
-		
-		pixels = make([]Pixel, 0, pixelCount)
+		// Read batch ID length and content (first 4 bytes, little-endian)
+		batchIdLength := int(uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16 | uint32(data[3])<<24)
 		offset := 4
 		
-		for i := 0; i < pixelCount && offset+8 <= len(data); i++ {
-			// Read x (2 bytes, little-endian)
-			x := int(uint16(data[offset]) | uint16(data[offset+1])<<8)
-			offset += 2
-			
-			// Read y (2 bytes, little-endian)
-			y := int(uint16(data[offset]) | uint16(data[offset+1])<<8)
-			offset += 2
-			
-			// Read color (4 bytes, little-endian)
-			colorValue := uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24
+		// Skip batch ID (we don't need it for saving to database)
+		if offset+batchIdLength <= len(data) {
+			offset += batchIdLength
+		} else {
+			fmt.Printf("[ERROR] onPixelUpdate invalid batch ID length: %d\n", batchIdLength)
+			return 1
+		}
+		
+		// Read pixel count (next 4 bytes, little-endian)
+		if offset+4 <= len(data) {
+			pixelCount := int(uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24)
 			offset += 4
+			fmt.Printf("[DEBUG] onPixelUpdate received binary data with %d pixels\n", pixelCount)
 			
-			// Convert to hex color string
-			color := fmt.Sprintf("#%06x", colorValue&0xFFFFFF)
+			pixels = make([]Pixel, 0, pixelCount)
 			
-			pixels = append(pixels, Pixel{
-				X:        x,
-				Y:        y,
-				Color:    color,
-				UserID:   "unknown", // Not included in binary format
-				Username: "unknown", // Not included in binary format
-			})
+			for i := 0; i < pixelCount && offset+8 <= len(data); i++ {
+				// Read x (2 bytes, little-endian)
+				x := int(uint16(data[offset]) | uint16(data[offset+1])<<8)
+				offset += 2
+				
+				// Read y (2 bytes, little-endian)
+				y := int(uint16(data[offset]) | uint16(data[offset+1])<<8)
+				offset += 2
+				
+				// Read color (4 bytes, little-endian)
+				colorValue := uint32(data[offset]) | uint32(data[offset+1])<<8 | uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24
+				offset += 4
+				
+				// Convert to hex color string
+				color := fmt.Sprintf("#%06x", colorValue&0xFFFFFF)
+				
+				pixels = append(pixels, Pixel{
+					X:        x,
+					Y:        y,
+					Color:    color,
+					UserID:   "unknown", // Not included in binary format
+					Username: "unknown", // Not included in binary format
+				})
+			}
+		} else {
+			fmt.Printf("[ERROR] onPixelUpdate insufficient data for pixel count\n")
+			return 1
 		}
 	} else {
 		fmt.Printf("[ERROR] onPixelUpdate insufficient binary data: %d bytes\n", len(data))
